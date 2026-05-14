@@ -123,6 +123,26 @@ fn licence_identifiers(configured: &[SpdxLicense], ignore_config: bool) -> Vec<S
     }
 }
 
+pub(crate) fn licence_policy_from_options(
+    config: &PackageConfig,
+    options: &LicenceAuditOptions,
+) -> Option<Result<LicencePolicy>> {
+    if options.report {
+        return None;
+    }
+
+    let allowed = licence_identifiers(&config.licence_audit.allow, options.ignore_config)
+        .into_iter()
+        .chain(options.allow.iter().map(|licence| licence.to_string()))
+        .collect();
+    let denied = licence_identifiers(&config.licence_audit.deny, options.ignore_config)
+        .into_iter()
+        .chain(options.deny.iter().map(|licence| licence.to_string()))
+        .collect();
+
+    Some(LicencePolicy::required(allowed, denied))
+}
+
 fn list_manifest_packages<W: std::io::Write>(mut buffer: W, manifest: Manifest) -> Result<()> {
     let packages = manifest
         .packages
@@ -218,6 +238,14 @@ pub(crate) struct LicenceAuditRow {
     status: LicenceAuditStatus,
 }
 
+fn licences_from_package_config(config: PackageConfig) -> Vec<String> {
+    config
+        .licences
+        .iter()
+        .map(|licence| licence.as_ref().to_string())
+        .collect_vec()
+}
+
 pub(crate) fn licence_audit_row_from_package_config(
     package: &ManifestPackage,
     config: Result<PackageConfig>,
@@ -225,14 +253,30 @@ pub(crate) fn licence_audit_row_from_package_config(
 ) -> LicenceAuditRow {
     let (licences, status) = match config {
         Ok(config) => {
-            let licences = config
-                .licences
-                .iter()
-                .map(|licence| licence.as_ref().to_string())
-                .collect_vec();
+            let licences = licences_from_package_config(config);
             let status = policy.evaluate(&licences);
             (licences, status)
         }
+        Err(error) => (
+            vec![],
+            LicenceAuditStatus::FailedToReadLicenceData(error.to_string()),
+        ),
+    };
+
+    LicenceAuditRow {
+        package: package.name.clone(),
+        version: package.version.clone(),
+        licences,
+        status,
+    }
+}
+
+pub(crate) fn licence_report_row_from_package_config(
+    package: &ManifestPackage,
+    config: Result<PackageConfig>,
+) -> LicenceAuditRow {
+    let (licences, status) = match config {
+        Ok(config) => (licences_from_package_config(config), LicenceAuditStatus::Ok),
         Err(error) => (
             vec![],
             LicenceAuditStatus::FailedToReadLicenceData(error.to_string()),
@@ -271,6 +315,39 @@ pub(crate) fn format_licence_audit_report(
     let report = eco_format!(
         "{}\n{} packages audited, {} failed, {} skipped.\n",
         space_table(&["Package", "Version", "Licences", "Status"], table_rows),
+        rows.len(),
+        failed,
+        skipped,
+    );
+    (report, failed)
+}
+
+pub(crate) fn format_licence_report(
+    rows: &[LicenceAuditRow],
+    skipped: usize,
+) -> (EcoString, usize) {
+    let table_rows = rows
+        .iter()
+        .map(|row| {
+            vec![
+                row.package.to_string(),
+                row.version.to_string(),
+                match &row.status {
+                    LicenceAuditStatus::FailedToReadLicenceData(_) => row.status.to_string(),
+                    _ if row.licences.is_empty() => "-".into(),
+                    _ => row.licences.iter().sorted().dedup().join(", "),
+                },
+            ]
+        })
+        .collect_vec();
+
+    let failed = rows
+        .iter()
+        .filter(|row| matches!(row.status, LicenceAuditStatus::FailedToReadLicenceData(_)))
+        .count();
+    let report = eco_format!(
+        "{}\n{} packages reported, {} failed, {} skipped.\n",
+        space_table(&["Package", "Version", "Licences"], table_rows),
         rows.len(),
         failed,
         skipped,
@@ -421,18 +498,21 @@ pub fn update(paths: &ProjectPaths, packages: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+fn read_installed_hex_package_config(
+    runtime: &tokio::runtime::Runtime,
+    downloader: &hex::Downloader,
+    paths: &ProjectPaths,
+    package: &ManifestPackage,
+) -> Result<PackageConfig> {
+    match runtime.block_on(downloader.ensure_package_in_build_directory(package)) {
+        Ok(_) => crate::config::read(paths.build_packages_package_config(&package.name)),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn licences(paths: &ProjectPaths, options: LicenceAuditOptions) -> Result<()> {
     let (config, manifest) = get_manifest_details(paths)?;
-
-    let allowed = licence_identifiers(&config.licence_audit.allow, options.ignore_config)
-        .into_iter()
-        .chain(options.allow.into_iter().map(|licence| licence.to_string()))
-        .collect();
-    let denied = licence_identifiers(&config.licence_audit.deny, options.ignore_config)
-        .into_iter()
-        .chain(options.deny.into_iter().map(|licence| licence.to_string()))
-        .collect();
-    let policy = LicencePolicy::required(allowed, denied)?;
+    let policy = licence_policy_from_options(&config, &options).transpose()?;
 
     let runtime = tokio::runtime::Runtime::new().expect("Unable to start Tokio async runtime");
     let downloader = hex::Downloader::new(
@@ -455,17 +535,18 @@ pub fn licences(paths: &ProjectPaths, options: LicenceAuditOptions) -> Result<()
     let rows = hex_packages
         .iter()
         .map(|package| {
-            let config = match runtime
-                .block_on(downloader.ensure_package_in_build_directory(package))
-            {
-                Ok(_) => crate::config::read(paths.build_packages_package_config(&package.name)),
-                Err(error) => Err(error),
-            };
-            licence_audit_row_from_package_config(package, config, &policy)
+            let config = read_installed_hex_package_config(&runtime, &downloader, paths, package);
+            match &policy {
+                Some(policy) => licence_audit_row_from_package_config(package, config, policy),
+                None => licence_report_row_from_package_config(package, config),
+            }
         })
         .collect_vec();
 
-    let (report, failed) = format_licence_audit_report(&rows, skipped_non_hex_packages);
+    let (report, failed) = match policy {
+        Some(_) => format_licence_audit_report(&rows, skipped_non_hex_packages),
+        None => format_licence_report(&rows, skipped_non_hex_packages),
+    };
     print!("{report}");
 
     if failed > 0 {

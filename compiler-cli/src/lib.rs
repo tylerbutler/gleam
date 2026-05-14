@@ -538,6 +538,10 @@ pub struct LicenceAuditOptions {
     /// Ignore licence audit policy configured in gleam.toml.
     #[arg(long)]
     pub(crate) ignore_config: bool,
+
+    /// Report dependency package licences without applying a policy.
+    #[arg(long)]
+    pub(crate) report: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1040,6 +1044,13 @@ mod tests {
     fn licence_audit_accepts_valid_cli_allow_licence() {
         let result =
             Command::try_parse_from(["gleam", "deps", "licences", "--allow", "Apache-2.0"]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn licence_report_flag_parses_without_policy_flags() {
+        let result = Command::try_parse_from(["gleam", "deps", "licences", "--report"]);
 
         assert!(result.is_ok());
     }

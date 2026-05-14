@@ -1622,6 +1622,50 @@ fn licence_audit_report_format_sorted_licences() {
 }
 
 #[test]
+fn licence_report_format_omits_audit_status() {
+    let rows = vec![LicenceAuditRow {
+        package: "gleam_stdlib".into(),
+        version: Version::new(1, 0, 2),
+        licences: vec!["MIT".into(), "Apache-2.0".into(), "MIT".into()],
+        status: LicenceAuditStatus::NoLicencesDeclared,
+    }];
+
+    let (report, failed) = format_licence_report(&rows, 0);
+
+    assert_eq!(failed, 0);
+    assert_eq!(
+        report,
+        "Package       Version  Licences\n\
+         -------       -------  --------\n\
+         gleam_stdlib  1.0.2    Apache-2.0, MIT\n\
+         \n\
+         1 packages reported, 0 failed, 0 skipped.\n"
+    );
+}
+
+#[test]
+fn licence_report_format_shows_read_failures() {
+    let rows = vec![LicenceAuditRow {
+        package: "example".into(),
+        version: Version::new(1, 0, 0),
+        licences: vec![],
+        status: LicenceAuditStatus::FailedToReadLicenceData("File not found".into()),
+    }];
+
+    let (report, failed) = format_licence_report(&rows, 0);
+
+    assert_eq!(failed, 1);
+    assert_eq!(
+        report,
+        "Package  Version  Licences\n\
+         -------  -------  --------\n\
+         example  1.0.0    failed to read package licence data: File not found\n\
+         \n\
+         1 packages reported, 1 failed, 0 skipped.\n"
+    );
+}
+
+#[test]
 fn licence_audit_report_format_fetch_failure() {
     let rows = vec![LicenceAuditRow {
         package: "example".into(),
@@ -1662,6 +1706,40 @@ fn licence_audit_row_uses_local_package_config_licences() {
             status: LicenceAuditStatus::Ok,
         }
     );
+}
+
+#[test]
+fn licence_report_row_does_not_evaluate_policy() {
+    let package = manifest_package("example", "1.0.0", vec![]);
+    let mut config = package_config(HashMap::new(), HashMap::new());
+    config.licences = vec![SpdxLicense {
+        licence: "GPL-3.0-only".into(),
+    }];
+
+    let row = licence_report_row_from_package_config(&package, Ok(config));
+
+    assert_eq!(
+        row,
+        LicenceAuditRow {
+            package: "example".into(),
+            version: Version::new(1, 0, 0),
+            licences: vec!["GPL-3.0-only".into()],
+            status: LicenceAuditStatus::Ok,
+        }
+    );
+}
+
+#[test]
+fn licence_report_options_do_not_require_policy() {
+    let options = LicenceAuditOptions {
+        allow: vec![],
+        deny: vec![],
+        ignore_config: false,
+        report: true,
+    };
+    let config = package_config(HashMap::new(), HashMap::new());
+
+    assert!(licence_policy_from_options(&config, &options).is_none());
 }
 
 #[test]
