@@ -57,6 +57,11 @@
 
 ### Build tool
 
+- The `gleam deps licences` command has been added to audit the licences of Hex
+  dependencies against a policy. The policy can be configured in `gleam.toml` or
+  provided with the `--allow` and `--deny` flags.
+  ([Tyler Bui-Palsulich](https://github.com/tylerbu))
+
 - The `gleam dev` command now accepts the `--no-print-progress` flag. When this
   flag is passed, no progress information is printed.
   ([Giacomo Cavalieri](https://github.com/giacomocavalieri))
