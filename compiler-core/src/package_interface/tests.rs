@@ -8,7 +8,9 @@ use hexpm::version::Identifier;
 use crate::{
     analyse::TargetSupport,
     build::{Module, Origin, Package, Target},
-    config::{Docs, ErlangConfig, GleamVersion, JavaScriptConfig, LicenceAuditConfig, PackageConfig},
+    config::{
+        Docs, ErlangConfig, GleamVersion, JavaScriptConfig, LicenceAuditConfig, PackageConfig,
+    },
     line_numbers::LineNumbers,
     type_::PRELUDE_MODULE_NAME,
     uid::UniqueIdGenerator,

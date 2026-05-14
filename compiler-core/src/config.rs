@@ -69,11 +69,17 @@ impl<'de> serde::de::Visitor<'de> for SpdxLicenseVisitor {
     where
         E: serde::de::Error,
     {
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::str::FromStr for SpdxLicense {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match spdx::license_id(value) {
-            None => Err(serde::de::Error::custom(format!(
-                "{value} is not a known SPDX License identifier"
-            ))),
-            Some(_) => Ok(SpdxLicense {
+            None => Err(format!("{value} is not a known SPDX License identifier")),
+            Some(_) => Ok(Self {
                 licence: value.to_string(),
             }),
         }
@@ -1347,8 +1353,8 @@ version = "1.0.0"
     )
     .unwrap();
 
-    assert_eq!(config.licence_audit.allow, Vec::<SpdxLicense>::new());
-    assert_eq!(config.licence_audit.deny, Vec::<SpdxLicense>::new());
+    assert!(config.licence_audit.allow.is_empty());
+    assert!(config.licence_audit.deny.is_empty());
 }
 
 #[test]

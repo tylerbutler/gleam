@@ -529,11 +529,11 @@ pub struct CompilePackage {
 pub struct LicenceAuditOptions {
     /// Licence identifiers allowed by policy for this run. Can be supplied multiple times.
     #[arg(long)]
-    pub(crate) allow: Vec<String>,
+    pub(crate) allow: Vec<gleam_core::config::SpdxLicense>,
 
     /// Licence identifiers denied by policy for this run. Can be supplied multiple times.
     #[arg(long)]
-    pub(crate) deny: Vec<String>,
+    pub(crate) deny: Vec<gleam_core::config::SpdxLicense>,
 
     /// Ignore licence audit policy configured in gleam.toml.
     #[arg(long)]
@@ -1023,4 +1023,24 @@ fn download_dependencies(paths: &ProjectPaths) -> Result<()> {
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn licence_audit_rejects_invalid_cli_allow_licence() {
+        let result = Command::try_parse_from(["gleam", "deps", "licences", "--allow", "Apach-2.0"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn licence_audit_accepts_valid_cli_allow_licence() {
+        let result =
+            Command::try_parse_from(["gleam", "deps", "licences", "--allow", "Apache-2.0"]);
+
+        assert!(result.is_ok());
+    }
 }

@@ -8,7 +8,9 @@ use pretty_assertions::assert_eq;
 use gleam_core::{
     Error,
     build::Runtime,
-    config::{DenoConfig, DenoFlag, Docs, ErlangConfig, JavaScriptConfig, LicenceAuditConfig},
+    config::{
+        DenoConfig, DenoFlag, Docs, ErlangConfig, JavaScriptConfig, LicenceAuditConfig, SpdxLicense,
+    },
     manifest::{Base16Checksum, Manifest, ManifestPackage, ManifestPackageSource},
     paths::ProjectPaths,
     requirement::Requirement,
@@ -1552,15 +1554,12 @@ fn licence_policy_allows_known_licence() {
 fn licence_policy_rejects_unallowed_licence() {
     let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
     let status = policy.evaluate(&["MIT".to_string()]);
-    assert_eq!(status, LicenceAuditStatus::NotAllowed("MIT".into()));
+    assert_eq!(status, LicenceAuditStatus::NotInAllowList("MIT".into()));
 }
 
 #[test]
 fn licence_policy_denies_denied_licence() {
-    let policy = LicencePolicy::new(
-        vec!["Apache-2.0".into(), "MIT".into()],
-        vec!["MIT".into()],
-    );
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into(), "MIT".into()], vec!["MIT".into()]);
     let status = policy.evaluate(&["MIT".to_string()]);
     assert_eq!(status, LicenceAuditStatus::Denied("MIT".into()));
 }
@@ -1585,7 +1584,7 @@ fn licence_audit_report_format() {
             package: "wibble".into(),
             version: Version::new(2, 1, 0),
             licences: vec!["GPL-3.0-only".into()],
-            status: LicenceAuditStatus::NotAllowed("GPL-3.0-only".into()),
+            status: LicenceAuditStatus::NotInAllowList("GPL-3.0-only".into()),
         },
     ];
 
@@ -1614,12 +1613,55 @@ fn licence_audit_report_format_sorted_licences() {
     let rows = vec![LicenceAuditRow {
         package: "example".into(),
         version: Version::new(1, 0, 0),
-        licences: vec!["MIT".into(), "Apache-2.0".into()],
+        licences: vec!["MIT".into(), "Apache-2.0".into(), "MIT".into()],
         status: LicenceAuditStatus::Ok,
     }];
 
     let (report, _) = format_licence_audit_report(&rows, 0);
     assert!(report.contains("Apache-2.0, MIT"));
+}
+
+#[test]
+fn licence_audit_report_format_fetch_failure() {
+    let rows = vec![LicenceAuditRow {
+        package: "example".into(),
+        version: Version::new(1, 0, 0),
+        licences: vec![],
+        status: LicenceAuditStatus::FailedToReadLicenceData("File not found".into()),
+    }];
+
+    let (report, failed) = format_licence_audit_report(&rows, 0);
+    assert_eq!(failed, 1);
+    assert_eq!(
+        report,
+        "Package  Version  Licences  Status\n\
+         -------  -------  --------  ------\n\
+         example  1.0.0    -         failed to read package licence data: File not found\n\
+         \n\
+         1 packages audited, 1 failed, 0 skipped.\n"
+    );
+}
+
+#[test]
+fn licence_audit_row_uses_local_package_config_licences() {
+    let package = manifest_package("example", "1.0.0", vec![]);
+    let mut config = package_config(HashMap::new(), HashMap::new());
+    config.licences = vec![SpdxLicense {
+        licence: "Apache-2.0".into(),
+    }];
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
+
+    let row = licence_audit_row_from_package_config(&package, Ok(config), &policy);
+
+    assert_eq!(
+        row,
+        LicenceAuditRow {
+            package: "example".into(),
+            version: Version::new(1, 0, 0),
+            licences: vec!["Apache-2.0".into()],
+            status: LicenceAuditStatus::Ok,
+        }
+    );
 }
 
 #[test]
@@ -1661,7 +1703,7 @@ fn licence_policy_denies_if_any_licence_denied() {
 fn licence_policy_rejects_unallowed_licence_in_multi_licence_package() {
     let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
     let status = policy.evaluate(&["Apache-2.0".to_string(), "MIT".to_string()]);
-    assert_eq!(status, LicenceAuditStatus::NotAllowed("MIT".into()));
+    assert_eq!(status, LicenceAuditStatus::NotInAllowList("MIT".into()));
 }
 
 #[test]
