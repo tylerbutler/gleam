@@ -978,6 +978,24 @@ pub struct Dependency {
     pub repository: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, serde::Deserialize)]
+pub struct ApiPackage {
+    pub name: String,
+    pub meta: ApiPackageMeta,
+    pub releases: Vec<ApiPackageRelease>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, serde::Deserialize)]
+pub struct ApiPackageMeta {
+    #[serde(default)]
+    pub licenses: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, serde::Deserialize)]
+pub struct ApiPackageRelease {
+    pub version: Version,
+}
+
 static USER_AGENT: &str = concat!("Gleam v", env!("CARGO_PKG_VERSION"));
 
 fn validate_package_and_version(package: &str, version: &str) -> Result<(), ApiError> {
@@ -1049,6 +1067,35 @@ pub fn api_get_package_release_request(
 pub fn api_get_package_release_response(
     response: http::Response<Vec<u8>>,
 ) -> Result<Release<ReleaseMeta>, ApiError> {
+    let (parts, body) = response.into_parts();
+
+    match parts.status {
+        StatusCode::OK => Ok(serde_json::from_slice(&body)?),
+        StatusCode::NOT_FOUND => Err(ApiError::NotFound),
+        StatusCode::TOO_MANY_REQUESTS => Err(ApiError::RateLimited),
+        StatusCode::UNAUTHORIZED => Err(unauthorised_response(&parts.headers)),
+        StatusCode::FORBIDDEN => Err(ApiError::Forbidden),
+        status => Err(ApiError::unexpected_response(status, body)),
+    }
+}
+
+/// Create a request to get package information from the Hex API.
+pub fn api_get_package_request(
+    name: &str,
+    credentials: Option<&Credentials>,
+    config: &Config,
+) -> http::Request<Vec<u8>> {
+    let path = format!("packages/{name}");
+    config
+        .api_request(Method::GET, &path)
+        .read_credentials(credentials)
+        .header("accept", "application/json")
+        .body(vec![])
+        .expect("get_package request")
+}
+
+/// Parse a response to get package information from the Hex API.
+pub fn api_get_package_response(response: http::Response<Vec<u8>>) -> Result<ApiPackage, ApiError> {
     let (parts, body) = response.into_parts();
 
     match parts.status {

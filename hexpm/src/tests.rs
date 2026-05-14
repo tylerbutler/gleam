@@ -928,6 +928,58 @@ fn get_package_release_response_ok() {
 }
 
 #[test]
+fn api_get_package_request() {
+    let config = Config::new();
+    let request = crate::api_get_package_request("gleam_stdlib", None, &config);
+
+    assert_eq!(request.method(), http::Method::GET);
+    assert_eq!(request.uri().path(), "/api/packages/gleam_stdlib");
+    assert_eq!(request.headers().get("accept").unwrap(), "application/json");
+}
+
+#[test]
+fn api_get_package_response_not_found() {
+    let response = make_response(404, vec![]);
+    let error = crate::api_get_package_response(response).unwrap_err();
+
+    assert!(error.is_not_found());
+}
+
+#[test]
+fn api_get_package_response_ok() {
+    let resp_body = json!({
+        "meta": {
+            "links": {
+                "Repository": "https://github.com/gleam-lang/stdlib"
+            },
+            "description": "A standard library for the Gleam programming language",
+            "licenses": ["Apache-2.0"],
+            "maintainers": []
+        },
+        "name": "gleam_stdlib",
+        "url": "https://hex.pm/api/packages/gleam_stdlib",
+        "owners": [],
+        "inserted_at": "2019-05-11T19:28:05.343962Z",
+        "updated_at": "2026-05-14T09:16:38.395145Z",
+        "repository": "hexpm",
+        "releases": [
+            {
+                "version": "1.0.2",
+                "url": "https://hex.pm/api/packages/gleam_stdlib/releases/1.0.2",
+                "has_docs": true,
+                "inserted_at": "2026-05-14T09:16:37.010043Z"
+            }
+        ]
+    });
+    let response = make_json_response(200, resp_body);
+    let resp = crate::api_get_package_response(response).unwrap();
+
+    assert_eq!(resp.name, "gleam_stdlib");
+    assert_eq!(resp.meta.licenses, vec!["Apache-2.0".to_string()]);
+    assert_eq!(resp.releases[0].version, Version::new(1, 0, 2));
+}
+
+#[test]
 fn make_request_base_trailing_slash_is_optional() {
     let slash = http::Uri::from_static("http://host/path/");
     let no_slash = http::Uri::from_static("http://host/path");
