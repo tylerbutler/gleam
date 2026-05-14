@@ -525,6 +525,35 @@ pub struct CompilePackage {
     skip_beam_compilation: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct LicenceAuditOptions {
+    /// Licence identifiers allowed by policy for this run. Can be supplied multiple times.
+    #[arg(long = "allow")]
+    allowed: Vec<String>,
+
+    /// Licence identifiers denied by policy for this run. Can be supplied multiple times.
+    #[arg(long = "deny")]
+    denied: Vec<String>,
+
+    /// Ignore licence audit policy configured in gleam.toml.
+    #[arg(long)]
+    ignore_config: bool,
+}
+
+impl LicenceAuditOptions {
+    pub fn allowed(&self) -> &[String] {
+        &self.allowed
+    }
+
+    pub fn denied(&self) -> &[String] {
+        &self.denied
+    }
+
+    pub fn ignore_config(&self) -> bool {
+        self.ignore_config
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum Dependencies {
     /// List all dependency packages
@@ -541,6 +570,10 @@ enum Dependencies {
 
     /// Tree of all the dependency packages
     Tree(TreeOptions),
+
+    /// Audit dependency package licences
+    #[command(visible_alias = "licenses")]
+    Licences(LicenceAuditOptions),
 }
 
 #[derive(Subcommand, Debug)]
@@ -766,6 +799,11 @@ fn parse_and_run_command() -> Result<(), Error> {
         Command::Deps(Dependencies::Tree(options)) => {
             let paths = find_project_paths()?;
             dependencies::tree(&paths, options)
+        }
+
+        Command::Deps(Dependencies::Licences(options)) => {
+            let paths = find_project_paths()?;
+            dependencies::licences(&paths, options)
         }
 
         Command::Hex(Hex::Authenticate) => hex::authenticate(),

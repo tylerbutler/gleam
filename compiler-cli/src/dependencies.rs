@@ -2,7 +2,7 @@ mod dependency_manager;
 
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io::ErrorKind,
     process::Command,
     rc::Rc,
@@ -35,7 +35,7 @@ pub use dependency_manager::DependencyManagerConfig;
 mod tests;
 
 use crate::{
-    TreeOptions,
+    LicenceAuditOptions, TreeOptions,
     build_lock::{BuildLock, Guard},
     cli,
     fs::{self, ProjectIO},
@@ -124,6 +124,111 @@ fn list_manifest_packages<W: std::io::Write>(mut buffer: W, manifest: Manifest) 
         action: StandardIoAction::Write,
         err: Some(e.kind()),
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LicencePolicy {
+    allowed: BTreeSet<String>,
+    denied: BTreeSet<String>,
+}
+
+impl LicencePolicy {
+    pub(crate) fn new(
+        allowed: Vec<String>,
+        denied: Vec<String>,
+        require_policy: bool,
+    ) -> Result<Self> {
+        if allowed.is_empty() && denied.is_empty() {
+            if !require_policy {
+                return Ok(Self {
+                    allowed: BTreeSet::new(),
+                    denied: BTreeSet::new(),
+                });
+            }
+            return Err(Error::NoLicenceAuditPolicy);
+        }
+
+        Ok(Self {
+            allowed: allowed.into_iter().collect(),
+            denied: denied.into_iter().collect(),
+        })
+    }
+
+    pub(crate) fn evaluate(&self, licences: &[String]) -> LicenceAuditStatus {
+        if licences.is_empty() {
+            return LicenceAuditStatus::Failed("no licences declared".into());
+        }
+
+        for licence in licences {
+            if self.denied.contains(licence) {
+                return LicenceAuditStatus::Failed(format!("denied licence {licence}"));
+            }
+        }
+
+        if !self.allowed.is_empty() {
+            for licence in licences {
+                if !self.allowed.contains(licence) {
+                    return LicenceAuditStatus::Failed(format!("unallowed licence {licence}"));
+                }
+            }
+        }
+
+        LicenceAuditStatus::Ok
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LicenceAuditStatus {
+    Ok,
+    Failed(String),
+}
+
+impl LicenceAuditStatus {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Ok => "ok",
+            Self::Failed(reason) => reason,
+        }
+    }
+
+    fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LicenceAuditRow {
+    package: EcoString,
+    version: Version,
+    licences: Vec<String>,
+    status: LicenceAuditStatus,
+}
+
+pub(crate) fn format_licence_audit_report(rows: &[LicenceAuditRow], skipped: usize) -> EcoString {
+    let table_rows = rows
+        .iter()
+        .map(|row| {
+            vec![
+                row.package.to_string(),
+                row.version.to_string(),
+                if row.licences.is_empty() {
+                    "-".into()
+                } else {
+                    row.licences.iter().sorted().join(", ")
+                },
+                row.status.as_str().into(),
+            ]
+        })
+        .collect_vec();
+
+    let failed = rows.iter().filter(|row| row.status.is_failed()).count();
+    eco_format!(
+        "{}\n{} packages audited, {} failed, {} skipped.\n",
+        space_table(&["Package", "Version", "Licences", "Status"], table_rows),
+        rows.len(),
+        failed,
+        skipped,
+    )
 }
 
 fn list_package_and_dependencies_tree<W: std::io::Write>(
@@ -265,6 +370,73 @@ pub fn update(paths: &ProjectPaths, packages: Vec<String>) -> Result<()> {
             check_major_versions: CheckMajorVersions::Yes,
         },
     )?;
+
+    Ok(())
+}
+
+pub fn licences(paths: &ProjectPaths, options: LicenceAuditOptions) -> Result<()> {
+    let (config, manifest) = get_manifest_details(paths)?;
+    let mut allowed = if options.ignore_config() {
+        vec![]
+    } else {
+        config
+            .licence_audit
+            .allow
+            .iter()
+            .map(|licence| licence.as_ref().to_string())
+            .collect_vec()
+    };
+    let mut denied = if options.ignore_config() {
+        vec![]
+    } else {
+        config
+            .licence_audit
+            .deny
+            .iter()
+            .map(|licence| licence.as_ref().to_string())
+            .collect_vec()
+    };
+    allowed.extend(options.allowed().iter().cloned());
+    denied.extend(options.denied().iter().cloned());
+
+    let policy = LicencePolicy::new(allowed, denied, true)?;
+
+    let runtime = tokio::runtime::Runtime::new().expect("Unable to start Tokio async runtime");
+    let http = HttpClient::new();
+    let hex_config = hexpm::Config::new();
+
+    let mut rows = vec![];
+    let mut skipped = 0;
+
+    for package in manifest.packages.iter().sorted_by_key(|package| &package.name) {
+        if !package.is_hex() {
+            skipped += 1;
+            continue;
+        }
+
+        let metadata = runtime.block_on(hex::get_package(
+            package.name.as_str(),
+            &hex_config,
+            &http,
+        ))?;
+
+        let mut licences = metadata.meta.licenses;
+        licences.sort();
+        licences.dedup();
+
+        rows.push(LicenceAuditRow {
+            package: package.name.clone(),
+            version: package.version.clone(),
+            status: policy.evaluate(&licences),
+            licences,
+        });
+    }
+
+    print!("{}", format_licence_audit_report(&rows, skipped));
+
+    if rows.iter().any(|row| row.status.is_failed()) {
+        return Err(Error::LicenceAuditFailed);
+    }
 
     Ok(())
 }

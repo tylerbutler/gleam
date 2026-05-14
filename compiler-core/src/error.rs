@@ -412,6 +412,12 @@ file_names.iter().map(|x| x.as_str()).join(", "))]
 
     #[error("Incorrect Hex one-time-password")]
     IncorrectHexOneTimePassword,
+
+    #[error("No licence policy supplied")]
+    NoLicenceAuditPolicy,
+
+    #[error("Dependency licence audit failed")]
+    LicenceAuditFailed,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -1003,6 +1009,22 @@ via the Hex website: https://hex.pm/dashboard/security
                     hint: None,
                 }]
             }
+
+            Error::NoLicenceAuditPolicy => vec![Diagnostic {
+                title: "No licence policy supplied".into(),
+                text: "The `gleam deps licences` command requires a policy. Configure `[licence_audit]` in `gleam.toml` or provide `--allow` or `--deny` options.".into(),
+                hint: Some("For example: add `[licence_audit] allow = [\"Apache-2.0\", \"MIT\"]` to gleam.toml.".into()),
+                level: Level::Error,
+                location: None,
+            }],
+
+            Error::LicenceAuditFailed => vec![Diagnostic {
+                title: "Dependency licence audit failed".into(),
+                text: "One or more Hex dependencies do not satisfy the configured licence policy.".into(),
+                hint: Some("Review the report above and update the dependency or policy.".into()),
+                level: Level::Error,
+                location: None,
+            }],
 
             Error::HexPackageSquatting => {
                 let text =
