@@ -1,5 +1,6 @@
 ---
 source: compiler-core/src/config.rs
+assertion_line: 1300
 expression: output
 ---
 --- GLEAM.TOML
@@ -122,5 +123,9 @@ allow_read = ["./database.sqlite"]
   "target": "erlang",
   "internal_modules": [
     "my_app/internal"
-  ]
+  ],
+  "licence_audit": {
+    "allow": [],
+    "deny": []
+  }
 }

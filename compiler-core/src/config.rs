@@ -143,6 +143,14 @@ impl GleamVersion {
     }
 }
 
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, Default)]
+pub struct LicenceAuditConfig {
+    #[serde(default)]
+    pub allow: Vec<SpdxLicense>,
+    #[serde(default)]
+    pub deny: Vec<SpdxLicense>,
+}
+
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct PackageConfig {
     #[serde(deserialize_with = "package_name::deserialize")]
@@ -188,6 +196,8 @@ pub struct PackageConfig {
     pub target: Target,
     #[serde(default)]
     pub internal_modules: Option<Vec<Glob>>,
+    #[serde(default)]
+    pub licence_audit: LicenceAuditConfig,
 }
 
 pub fn serialise_gleam_version<S>(
@@ -739,6 +749,7 @@ impl Default for PackageConfig {
             links: Default::default(),
             internal_modules: Default::default(),
             target: Target::Erlang,
+            licence_audit: Default::default(),
         }
     }
 }
@@ -1324,4 +1335,52 @@ wibble = ">= 1.0.0 and < 2.0.0"
 "#;
     let canonical = deserialise_config("gleam.toml", toml.into()).expect("valid config");
     assert_eq!(canonical, hyphen_alternative)
+}
+
+#[test]
+fn licence_audit_config_defaults_to_empty_policy() {
+    let config = toml::from_str::<PackageConfig>(
+        r#"
+name = "app"
+version = "1.0.0"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.licence_audit.allow, Vec::<SpdxLicense>::new());
+    assert_eq!(config.licence_audit.deny, Vec::<SpdxLicense>::new());
+}
+
+#[test]
+fn licence_audit_config_parses_allow_and_deny_lists() {
+    let config = toml::from_str::<PackageConfig>(
+        r#"
+name = "app"
+version = "1.0.0"
+
+[licence_audit]
+allow = ["Apache-2.0", "MIT"]
+deny = ["GPL-3.0-only"]
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config
+            .licence_audit
+            .allow
+            .iter()
+            .map(|licence| licence.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["Apache-2.0", "MIT"]
+    );
+    assert_eq!(
+        config
+            .licence_audit
+            .deny
+            .iter()
+            .map(|licence| licence.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["GPL-3.0-only"]
+    );
 }

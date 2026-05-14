@@ -8,7 +8,7 @@ use hexpm::version::Identifier;
 use crate::{
     analyse::TargetSupport,
     build::{Module, Origin, Package, Target},
-    config::{Docs, ErlangConfig, GleamVersion, JavaScriptConfig, PackageConfig},
+    config::{Docs, ErlangConfig, GleamVersion, JavaScriptConfig, LicenceAuditConfig, PackageConfig},
     line_numbers::LineNumbers,
     type_::PRELUDE_MODULE_NAME,
     uid::UniqueIdGenerator,
@@ -174,6 +174,7 @@ fn package_from_module(module: Module) -> Package {
                     .build()
                     .expect("internals glob"),
             ]),
+            licence_audit: LicenceAuditConfig::default(),
         },
         cached_module_names: Vec::new(),
         modules: vec![module],

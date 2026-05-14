@@ -1,5 +1,6 @@
 ---
 source: compiler-core/src/docs.rs
+assertion_line: 794
 expression: output
 ---
 --- GLEAM.TOML
@@ -48,6 +49,10 @@ version = "1.0.0"
       }
     },
     "target": "erlang",
-    "internal_modules": null
+    "internal_modules": null,
+    "licence_audit": {
+      "allow": [],
+      "deny": []
+    }
   }
 }
