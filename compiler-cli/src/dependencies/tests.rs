@@ -1543,19 +1543,16 @@ fn test_ensure_packages_exist_locally_some_missing() {
 
 #[test]
 fn licence_policy_allows_known_licence() {
-    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![], false).unwrap();
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
     let status = policy.evaluate(&["Apache-2.0".to_string()]);
     assert_eq!(status, LicenceAuditStatus::Ok);
 }
 
 #[test]
 fn licence_policy_rejects_unallowed_licence() {
-    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![], false).unwrap();
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
     let status = policy.evaluate(&["MIT".to_string()]);
-    assert_eq!(
-        status,
-        LicenceAuditStatus::Failed("unallowed licence MIT".into())
-    );
+    assert_eq!(status, LicenceAuditStatus::NotAllowed("MIT".into()));
 }
 
 #[test]
@@ -1563,24 +1560,16 @@ fn licence_policy_denies_denied_licence() {
     let policy = LicencePolicy::new(
         vec!["Apache-2.0".into(), "MIT".into()],
         vec!["MIT".into()],
-        false,
-    )
-    .unwrap();
-    let status = policy.evaluate(&["MIT".to_string()]);
-    assert_eq!(
-        status,
-        LicenceAuditStatus::Failed("denied licence MIT".into())
     );
+    let status = policy.evaluate(&["MIT".to_string()]);
+    assert_eq!(status, LicenceAuditStatus::Denied("MIT".into()));
 }
 
 #[test]
 fn licence_policy_rejects_missing_licence() {
-    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![], false).unwrap();
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
     let status = policy.evaluate(&[]);
-    assert_eq!(
-        status,
-        LicenceAuditStatus::Failed("no licences declared".into())
-    );
+    assert_eq!(status, LicenceAuditStatus::NoLicencesDeclared);
 }
 
 #[test]
@@ -1596,12 +1585,14 @@ fn licence_audit_report_format() {
             package: "wibble".into(),
             version: Version::new(2, 1, 0),
             licences: vec!["GPL-3.0-only".into()],
-            status: LicenceAuditStatus::Failed("unallowed licence GPL-3.0-only".into()),
+            status: LicenceAuditStatus::NotAllowed("GPL-3.0-only".into()),
         },
     ];
 
+    let (report, failed) = format_licence_audit_report(&rows, 0);
+    assert_eq!(failed, 1);
     assert_eq!(
-        format_licence_audit_report(&rows, 0),
+        report,
         "Package       Version  Licences      Status\n\
          -------       -------  --------      ------\n\
          gleam_stdlib  1.0.2    Apache-2.0    ok\n\
@@ -1613,8 +1604,7 @@ fn licence_audit_report_format() {
 
 #[test]
 fn licence_policy_allows_multiple_known_licences() {
-    let policy =
-        LicencePolicy::new(vec!["Apache-2.0".into(), "MIT".into()], vec![], false).unwrap();
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into(), "MIT".into()], vec![]);
     let status = policy.evaluate(&["Apache-2.0".to_string(), "MIT".to_string()]);
     assert_eq!(status, LicenceAuditStatus::Ok);
 }
@@ -1628,7 +1618,7 @@ fn licence_audit_report_format_sorted_licences() {
         status: LicenceAuditStatus::Ok,
     }];
 
-    let report = format_licence_audit_report(&rows, 0);
+    let (report, _) = format_licence_audit_report(&rows, 0);
     assert!(report.contains("Apache-2.0, MIT"));
 }
 
@@ -1641,7 +1631,8 @@ fn licence_audit_report_format_empty_licences() {
         status: LicenceAuditStatus::Ok,
     }];
 
-    let report = format_licence_audit_report(&rows, 0);
+    let (report, failed) = format_licence_audit_report(&rows, 0);
+    assert_eq!(failed, 0);
     assert_eq!(
         report,
         "Package  Version  Licences  Status\n\
@@ -1654,32 +1645,27 @@ fn licence_audit_report_format_empty_licences() {
 
 #[test]
 fn licence_policy_denylist_only_permissive() {
-    let policy = LicencePolicy::new(vec![], vec!["GPL-3.0-only".into()], false).unwrap();
+    let policy = LicencePolicy::new(vec![], vec!["GPL-3.0-only".into()]);
     let status = policy.evaluate(&["MIT".to_string()]);
     assert_eq!(status, LicenceAuditStatus::Ok);
 }
 
 #[test]
 fn licence_policy_denies_if_any_licence_denied() {
-    let policy = LicencePolicy::new(
-        vec!["Apache-2.0".into()],
-        vec!["GPL-3.0-only".into()],
-        false,
-    )
-    .unwrap();
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec!["GPL-3.0-only".into()]);
     let status = policy.evaluate(&["Apache-2.0".to_string(), "GPL-3.0-only".to_string()]);
-    assert_eq!(
-        status,
-        LicenceAuditStatus::Failed("denied licence GPL-3.0-only".into())
-    );
+    assert_eq!(status, LicenceAuditStatus::Denied("GPL-3.0-only".into()));
 }
 
 #[test]
 fn licence_policy_rejects_unallowed_licence_in_multi_licence_package() {
-    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![], false).unwrap();
+    let policy = LicencePolicy::new(vec!["Apache-2.0".into()], vec![]);
     let status = policy.evaluate(&["Apache-2.0".to_string(), "MIT".to_string()]);
-    assert_eq!(
-        status,
-        LicenceAuditStatus::Failed("unallowed licence MIT".into())
-    );
+    assert_eq!(status, LicenceAuditStatus::NotAllowed("MIT".into()));
+}
+
+#[test]
+fn licence_policy_required_errors_on_empty() {
+    let result = LicencePolicy::required(vec![], vec![]);
+    assert!(matches!(result, Err(Error::NoLicenceAuditPolicy)));
 }

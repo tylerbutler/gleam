@@ -12,10 +12,11 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 use ecow::{EcoString, eco_format};
 use flate2::read::GzDecoder;
+use futures::future;
 use gleam_core::{
     Error, Result,
     build::{Mode, SourceFingerprint, Target, Telemetry},
-    config::PackageConfig,
+    config::{PackageConfig, SpdxLicense},
     dependency::{self, PackageFetchError},
     error::{FileIoAction, FileKind, ShellCommandFailureReason, StandardIoAction},
     hex::{self, HEXPM_PUBLIC_KEY},
@@ -133,42 +134,35 @@ pub(crate) struct LicencePolicy {
 }
 
 impl LicencePolicy {
-    pub(crate) fn new(
-        allowed: Vec<String>,
-        denied: Vec<String>,
-        require_policy: bool,
-    ) -> Result<Self> {
-        if allowed.is_empty() && denied.is_empty() {
-            if !require_policy {
-                return Ok(Self {
-                    allowed: BTreeSet::new(),
-                    denied: BTreeSet::new(),
-                });
-            }
-            return Err(Error::NoLicenceAuditPolicy);
-        }
-
-        Ok(Self {
+    pub(crate) fn new(allowed: Vec<String>, denied: Vec<String>) -> Self {
+        Self {
             allowed: allowed.into_iter().collect(),
             denied: denied.into_iter().collect(),
-        })
+        }
+    }
+
+    pub(crate) fn required(allowed: Vec<String>, denied: Vec<String>) -> Result<Self> {
+        if allowed.is_empty() && denied.is_empty() {
+            return Err(Error::NoLicenceAuditPolicy);
+        }
+        Ok(Self::new(allowed, denied))
     }
 
     pub(crate) fn evaluate(&self, licences: &[String]) -> LicenceAuditStatus {
         if licences.is_empty() {
-            return LicenceAuditStatus::Failed("no licences declared".into());
+            return LicenceAuditStatus::NoLicencesDeclared;
         }
 
         for licence in licences {
             if self.denied.contains(licence) {
-                return LicenceAuditStatus::Failed(format!("denied licence {licence}"));
+                return LicenceAuditStatus::Denied(licence.clone());
             }
         }
 
         if !self.allowed.is_empty() {
             for licence in licences {
                 if !self.allowed.contains(licence) {
-                    return LicenceAuditStatus::Failed(format!("unallowed licence {licence}"));
+                    return LicenceAuditStatus::NotAllowed(licence.clone());
                 }
             }
         }
@@ -180,19 +174,25 @@ impl LicencePolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LicenceAuditStatus {
     Ok,
-    Failed(String),
+    NoLicencesDeclared,
+    Denied(String),
+    NotAllowed(String),
 }
 
 impl LicenceAuditStatus {
-    fn as_str(&self) -> &str {
-        match self {
-            Self::Ok => "ok",
-            Self::Failed(reason) => reason,
-        }
-    }
-
     fn is_failed(&self) -> bool {
-        matches!(self, Self::Failed(_))
+        !matches!(self, Self::Ok)
+    }
+}
+
+impl std::fmt::Display for LicenceAuditStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ok => f.write_str("ok"),
+            Self::NoLicencesDeclared => f.write_str("no licences declared"),
+            Self::Denied(licence) => write!(f, "denied licence {licence}"),
+            Self::NotAllowed(licence) => write!(f, "unallowed licence {licence}"),
+        }
     }
 }
 
@@ -204,7 +204,10 @@ pub(crate) struct LicenceAuditRow {
     status: LicenceAuditStatus,
 }
 
-pub(crate) fn format_licence_audit_report(rows: &[LicenceAuditRow], skipped: usize) -> EcoString {
+pub(crate) fn format_licence_audit_report(
+    rows: &[LicenceAuditRow],
+    skipped: usize,
+) -> (EcoString, usize) {
     let table_rows = rows
         .iter()
         .map(|row| {
@@ -216,19 +219,20 @@ pub(crate) fn format_licence_audit_report(rows: &[LicenceAuditRow], skipped: usi
                 } else {
                     row.licences.iter().sorted().join(", ")
                 },
-                row.status.as_str().into(),
+                row.status.to_string(),
             ]
         })
         .collect_vec();
 
     let failed = rows.iter().filter(|row| row.status.is_failed()).count();
-    eco_format!(
+    let report = eco_format!(
         "{}\n{} packages audited, {} failed, {} skipped.\n",
         space_table(&["Package", "Version", "Licences", "Status"], table_rows),
         rows.len(),
         failed,
         skipped,
-    )
+    );
+    (report, failed)
 }
 
 fn list_package_and_dependencies_tree<W: std::io::Write>(
@@ -376,65 +380,70 @@ pub fn update(paths: &ProjectPaths, packages: Vec<String>) -> Result<()> {
 
 pub fn licences(paths: &ProjectPaths, options: LicenceAuditOptions) -> Result<()> {
     let (config, manifest) = get_manifest_details(paths)?;
-    let mut allowed = if options.ignore_config() {
-        vec![]
-    } else {
-        config
-            .licence_audit
-            .allow
-            .iter()
-            .map(|licence| licence.as_ref().to_string())
-            .collect_vec()
-    };
-    let mut denied = if options.ignore_config() {
-        vec![]
-    } else {
-        config
-            .licence_audit
-            .deny
-            .iter()
-            .map(|licence| licence.as_ref().to_string())
-            .collect_vec()
-    };
-    allowed.extend(options.allowed().iter().cloned());
-    denied.extend(options.denied().iter().cloned());
 
-    let policy = LicencePolicy::new(allowed, denied, true)?;
+    let from_config = |configured: &[SpdxLicense]| -> Vec<String> {
+        if options.ignore_config {
+            vec![]
+        } else {
+            configured
+                .iter()
+                .map(|licence| licence.as_ref().to_string())
+                .collect()
+        }
+    };
+    let allowed = from_config(&config.licence_audit.allow)
+        .into_iter()
+        .chain(options.allow)
+        .collect();
+    let denied = from_config(&config.licence_audit.deny)
+        .into_iter()
+        .chain(options.deny)
+        .collect();
+    let policy = LicencePolicy::required(allowed, denied)?;
 
     let runtime = tokio::runtime::Runtime::new().expect("Unable to start Tokio async runtime");
     let http = HttpClient::new();
     let hex_config = hexpm::Config::new();
 
-    let mut rows = vec![];
-    let mut skipped = 0;
+    let sorted_packages = manifest
+        .packages
+        .iter()
+        .sorted_by_key(|package| &package.name)
+        .collect_vec();
+    let skipped = sorted_packages.iter().filter(|p| !p.is_hex()).count();
+    let hex_packages = sorted_packages
+        .iter()
+        .copied()
+        .filter(|p| p.is_hex())
+        .collect_vec();
 
-    for package in manifest.packages.iter().sorted_by_key(|package| &package.name) {
-        if !package.is_hex() {
-            skipped += 1;
-            continue;
-        }
+    let metadata = runtime.block_on(future::try_join_all(
+        hex_packages
+            .iter()
+            .map(|package| hex::get_package(package.name.as_str(), &hex_config, &http)),
+    ))?;
 
-        let metadata = runtime.block_on(hex::get_package(
-            package.name.as_str(),
-            &hex_config,
-            &http,
-        ))?;
+    let rows = hex_packages
+        .into_iter()
+        .zip(metadata)
+        .map(|(package, metadata)| {
+            let mut licences = metadata.meta.licenses;
+            licences.sort();
+            licences.dedup();
+            let status = policy.evaluate(&licences);
+            LicenceAuditRow {
+                package: package.name.clone(),
+                version: package.version.clone(),
+                licences,
+                status,
+            }
+        })
+        .collect_vec();
 
-        let mut licences = metadata.meta.licenses;
-        licences.sort();
-        licences.dedup();
+    let (report, failed) = format_licence_audit_report(&rows, skipped);
+    print!("{report}");
 
-        rows.push(LicenceAuditRow {
-            package: package.name.clone(),
-            version: package.version.clone(),
-            status: policy.evaluate(&licences),
-            licences,
-        });
-    }
-
-    print!("{}", format_licence_audit_report(&rows, skipped));
-
-    if rows.iter().any(|row| row.status.is_failed()) {
+    if failed > 0 {
         return Err(Error::LicenceAuditFailed);
     }
 

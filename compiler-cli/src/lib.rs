@@ -528,30 +528,16 @@ pub struct CompilePackage {
 #[derive(Args, Debug)]
 pub struct LicenceAuditOptions {
     /// Licence identifiers allowed by policy for this run. Can be supplied multiple times.
-    #[arg(long = "allow")]
-    allowed: Vec<String>,
+    #[arg(long)]
+    pub(crate) allow: Vec<String>,
 
     /// Licence identifiers denied by policy for this run. Can be supplied multiple times.
-    #[arg(long = "deny")]
-    denied: Vec<String>,
+    #[arg(long)]
+    pub(crate) deny: Vec<String>,
 
     /// Ignore licence audit policy configured in gleam.toml.
     #[arg(long)]
-    ignore_config: bool,
-}
-
-impl LicenceAuditOptions {
-    pub fn allowed(&self) -> &[String] {
-        &self.allowed
-    }
-
-    pub fn denied(&self) -> &[String] {
-        &self.denied
-    }
-
-    pub fn ignore_config(&self) -> bool {
-        self.ignore_config
-    }
+    pub(crate) ignore_config: bool,
 }
 
 #[derive(Subcommand, Debug)]
